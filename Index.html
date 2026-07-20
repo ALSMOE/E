@@ -122,8 +122,24 @@
   .teacher-hint{
     margin:8px 2px 0;font-size:12.5px;font-weight:700;color:var(--navy);
     display:none;
+    align-items:center;justify-content:space-between;
   }
-  .teacher-hint.show{display:block;}
+  .teacher-hint.show{display:flex;}
+  .hint-right-group{display:flex;align-items:center;gap:6px;}
+  .student-count{
+    color:var(--gray);font-weight:700;font-size:12px;
+    background:#f0f2f6;border-radius:20px;padding:3px 10px;
+  }
+  .refresh-btn{
+    border:none;background:#f0f2f6;color:var(--navy);
+    width:24px;height:24px;border-radius:50%;font-size:14px;
+    cursor:pointer;display:flex;align-items:center;justify-content:center;
+    padding:0;line-height:1;flex-shrink:0;
+  }
+  .refresh-btn:hover{background:#e2e6ee;}
+  .refresh-btn:disabled{opacity:.5;cursor:default;}
+  .refresh-btn.spinning{animation:spin .6s linear;}
+  @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 
   .btn{
     width:100%;
@@ -232,7 +248,13 @@
       <div class="field">
         <label>الفصل</label>
         <select id="att-class"><option value="">اختر الفصل</option></select>
-        <p class="teacher-hint" id="att-teacher-hint"></p>
+        <div class="teacher-hint" id="att-teacher-hint">
+          <span id="att-teacher-name"></span>
+          <span class="hint-right-group">
+            <span id="att-student-count" class="student-count"></span>
+            <button type="button" id="att-refresh-btn" class="refresh-btn" title="تحديث القائمة من الشيت">↻</button>
+          </span>
+        </div>
       </div>
     </div>
 
@@ -372,25 +394,13 @@
   const attList = document.getElementById('att-students');
   const attSaveBtn = document.getElementById('att-save-btn');
 
-  const RANDOM_NAME_POOL = [
-    'عبدالله المطيري','فيصل الحربي','سلطان القحطاني','ناصر الدوسري','تركي الغامدي',
-    'بندر الشهري','ماجد العنزي','يوسف السبيعي','إبراهيم الزهراني','خالد البقمي',
-    'عمر الجهني','طلال الحارثي','فهد المالكي','راشد العصيمي','عبدالرحمن القرني',
-    'مشعل الرشيدي','نواف الخالدي','زياد النفيعي','وليد الفيفي','أنس الشثري',
-    'سلمان اليامي','ريان العواجي','آدم الحسني','لؤي الشريف','معاذ الثبيتي',
-    'فارس السهلي','ياسر الحقباني','بدر السلطان','حسام العدواني','مازن العتيبي'
-  ];
-
-  function getRandomStudents(count){
-    const shuffled = [...RANDOM_NAME_POOL].sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, count).map((name, i) => ({ id: i + 1, name: name + ' (عشوائي)' }));
-  }
-
-  function renderAttendanceStudents(students){
+  function renderAttendanceStudents(students, emptyMessage){
+    const countEl = document.getElementById('att-student-count');
     attList.innerHTML = '';
     if(!students || students.length === 0){
-      attList.innerHTML = '<div class="empty">لا يوجد طلاب في هذا الفصل بعد</div>';
+      attList.innerHTML = '<div class="empty">' + (emptyMessage || 'لا يوجد طلاب في هذا الفصل بعد') + '</div>';
       attCard.style.display='block'; attSaveBtn.style.display='none';
+      if(countEl) countEl.textContent = 'عدد الطلاب: 0';
       return;
     }
     students.forEach(s=>{
@@ -414,10 +424,40 @@
     });
     attCard.style.display='block';
     attSaveBtn.style.display='block';
+    if(countEl) countEl.textContent = 'عدد الطلاب: ' + students.length;
+  }
+
+  function loadStudentsForClass(className, refreshBtn, onComplete){
+    if(refreshBtn){ refreshBtn.disabled = true; refreshBtn.classList.add('spinning'); }
+
+    function done(students, emptyMessage){
+      if(refreshBtn){ refreshBtn.disabled = false; refreshBtn.classList.remove('spinning'); }
+      renderAttendanceStudents(students, emptyMessage);
+      if(onComplete) onComplete();
+    }
+
+    // هذا الملف يعمل فقط عند فتحه من رابط تطبيق الويب المنشور (Apps Script) — وليس كملف مباشر
+    if(typeof google === 'undefined' || !google.script || !google.script.run){
+      done([], 'هذه الصفحة غير متصلة بالشيت — افتح رابط تطبيق الويب (ينتهي بـ /exec) بدل فتح الملف مباشرة');
+      showToast('غير متصل بالشيت — افتح رابط /exec المنشور', true);
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(students=>{
+        done(students || []);
+      })
+      .withFailureHandler(err=>{
+        done([], 'تعذّر الاتصال بالشيت: ' + err.message);
+        showToast('حدث خطأ أثناء جلب الطلاب', true);
+      })
+      .getStudentsByClass(className);
   }
 
   attClass.addEventListener('change', ()=>{
     const teacherHint = document.getElementById('att-teacher-hint');
+    const teacherNameEl = document.getElementById('att-teacher-name');
+    const countEl = document.getElementById('att-student-count');
     if(!attClass.value){
       attCard.style.display='none'; attSaveBtn.style.display='none';
       teacherHint.classList.remove('show');
@@ -425,27 +465,23 @@
     }
 
     const teacher = CLASS_TEACHERS[attClass.value];
+    countEl.textContent = '';
     if(teacher){
-      teacherHint.textContent = 'المعلم: ' + teacher;
+      teacherNameEl.textContent = 'المعلم: ' + teacher;
       teacherHint.classList.add('show');
     } else {
       teacherHint.classList.remove('show');
     }
 
-    // إذا كان النظام يعمل خارج بيئة Apps Script (بدون ربط بشيت)، نعرض أسماء عشوائية للتجربة
-    if(typeof google === 'undefined' || !google.script || !google.script.run){
-      renderAttendanceStudents(getRandomStudents(8));
-      return;
-    }
+    loadStudentsForClass(attClass.value);
+  });
 
-    google.script.run
-      .withSuccessHandler(students=>{
-        renderAttendanceStudents(students && students.length ? students : getRandomStudents(8));
-      })
-      .withFailureHandler(()=>{
-        renderAttendanceStudents(getRandomStudents(8));
-      })
-      .getStudentsByClass(attClass.value);
+  document.getElementById('att-refresh-btn').addEventListener('click', (e)=>{
+    e.preventDefault();
+    if(!attClass.value){ showToast('اختر الفصل أولاً', true); return; }
+    loadStudentsForClass(attClass.value, document.getElementById('att-refresh-btn'), ()=>{
+      showToast('تم تحديث القائمة من الشيت');
+    });
   });
 
   attSaveBtn.addEventListener('click', ()=>{
